@@ -1,0 +1,105 @@
+services:
+  # PostgreSQL Database for Central Server
+  postgres:
+    image: postgres:16-alpine
+    container_name: central-server-postgres
+    environment:
+      POSTGRES_USER: central_user
+      POSTGRES_PASSWORD: central_pass
+      POSTGRES_DB: central_server
+    ports:
+      - "5434:5432"
+    volumes:
+      - ./postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U central_user -d central_server"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # restart: unless-stopped
+
+  # Redis for caching/queues
+  redis:
+    image: redis:7-alpine
+    container_name: central-server-redis
+    ports:
+      - "6381:6379"
+    volumes:
+      - ./redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # restart: unless-stopped
+
+  # Central Server API
+  api:
+    build: .
+    container_name: central-server-api
+    ports:
+      - "8010:8010"
+    environment:
+      - DATABASE_URL=postgresql://central_user:central_pass@postgres:5432/central_server
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+    volumes:
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+      - ./uploads:/app/uploads
+      - ./detections:/app/detections
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # restart: unless-stopped
+
+  # Celery Worker for ANPR Processing
+  worker:
+    build: .
+    container_name: central-server-worker
+    entrypoint: []
+    command: bash -c "sleep 5 && ./scripts/start_worker.sh"
+    environment:
+      - DATABASE_URL=postgresql://central_user:central_pass@postgres:5432/central_server
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+    volumes:
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+      - ./uploads:/app/uploads
+      - ./detections:/app/detections
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # restart: unless-stopped
+
+  # Flower - Celery Monitoring UI (optional)
+  flower:
+    build: .
+    container_name: central-server-flower
+    entrypoint: []
+    command: bash -c "sleep 5 && ./scripts/start_flower.sh"
+    ports:
+      - "5556:5555"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+    depends_on:
+      - redis
+      - worker
+    # restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
