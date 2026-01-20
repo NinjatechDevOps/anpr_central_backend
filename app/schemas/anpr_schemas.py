@@ -113,6 +113,10 @@ class AnprDetectionResultResponse(BaseModel):
         None,
         description="Whether numberplate is visible"
     )
+    numberplate_text: Optional[str] = Field(
+        None,
+        description="Extracted numberplate text"
+    )
     numberplate_color: Optional[NumberplateColor] = Field(
         None,
         description="Numberplate color"
