@@ -14,6 +14,7 @@ from app.schemas.organization import (
 )
 from app.core.logging import app_logger as logger
 from app.core.exceptions import DuplicateException, NotFoundException
+from app.tasks.sync_tasks import sync_org_create, sync_org_update, sync_org_delete
 
 
 class OrganizationService:
@@ -40,6 +41,10 @@ class OrganizationService:
         org = self.repo.create(org_dict)
 
         logger.info(f"Organization created: {org.id} - {org.name} with token")
+
+        # Queue async sync to external server
+        sync_org_create.delay(org.id, org.name, org.token)
+
         return self._to_response(org)
 
     def regenerate_token(self, org_id: int) -> OrganizationResponse:
@@ -90,10 +95,27 @@ class OrganizationService:
             raise NotFoundException("Organization", org_id)
 
         logger.info(f"Organization updated: {org_id}")
+
+        # Queue async sync to external server
+        sync_org_update.delay(
+            org.id,
+            org.external_org_id or "",
+            org.name,
+            org.token,
+            update_dict,
+        )
+
         return self._to_response(org)
 
     def delete_organization(self, org_id: int) -> bool:
         """Delete an organization."""
+        org = self.repo.get_by_id(org_id)
+        if org is None:
+            raise NotFoundException("Organization", org_id)
+
+        # Queue async sync delete to external server
+        sync_org_delete.delay(org.id, org.external_org_id or "")
+
         success = self.repo.delete(org_id)
         if not success:
             raise NotFoundException("Organization", org_id)

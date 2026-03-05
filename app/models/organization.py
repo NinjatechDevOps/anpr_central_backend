@@ -28,6 +28,9 @@ class Organization(Base, BaseActiveModel):
     # Role - Super Admin can access all organizations' data
     is_super_admin = Column(Boolean, default=False, nullable=False, index=True)
 
+    # External Server Mapping
+    external_org_id = Column(String(100), nullable=True)  # UUID from external ANPR server
+
     # Contact Info
     email = Column(String(255), nullable=True)
     phone = Column(String(50), nullable=True)

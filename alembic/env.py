@@ -1,6 +1,7 @@
 """
 Alembic environment configuration.
 """
+import os
 from logging.config import fileConfig
 
 from sqlalchemy import engine_from_config
@@ -14,6 +15,10 @@ from app.models import Organization, AnprDetection
 
 # this is the Alembic Config object
 config = context.config
+
+# Override sqlalchemy.url with DATABASE_URL env var if set (e.g. inside Docker)
+if os.environ.get("DATABASE_URL"):
+    config.set_main_option("sqlalchemy.url", os.environ["DATABASE_URL"])
 
 # Interpret the config file for Python logging.
 if config.config_file_name is not None:

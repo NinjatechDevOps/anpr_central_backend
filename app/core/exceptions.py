@@ -59,3 +59,13 @@ class FileUploadException(AppException):
             detail=detail,
             status_code=status.HTTP_400_BAD_REQUEST
         )
+
+
+class ExternalSyncException(Exception):
+    """Exception for external server sync failures (not an HTTP exception)."""
+
+    def __init__(self, endpoint: str, status_code: int = 0, detail: str = ""):
+        self.endpoint = endpoint
+        self.sync_status_code = status_code
+        self.detail = detail
+        super().__init__(f"External sync failed [{endpoint}] status={status_code}: {detail}")
