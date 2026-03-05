@@ -10,7 +10,7 @@ celery_app = Celery(
     "anpr_worker",
     broker=f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}",
     backend=f"redis://{settings.REDIS_HOST}:{settings.REDIS_PORT}/{settings.REDIS_DB}",
-    include=["app.tasks.anpr_tasks"]  # Import tasks module
+    include=["app.tasks.anpr_tasks", "app.tasks.sync_tasks"]
 )
 
 # Celery Configuration
@@ -48,7 +48,10 @@ celery_app.conf.update(
 
 # Task routes (optional - for multiple queues)
 celery_app.conf.task_routes = {
-    "app.tasks.anpr_tasks.process_anpr_detection": {"queue": "anpr_processing"},
+    "process_anpr_detection": {"queue": "anpr_processing"},
+    "sync_org_create": {"queue": "external_sync"},
+    "sync_org_update": {"queue": "external_sync"},
+    "sync_org_delete": {"queue": "external_sync"},
 }
 
 logger.info("Celery app configured successfully")

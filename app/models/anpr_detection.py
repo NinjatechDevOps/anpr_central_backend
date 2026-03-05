@@ -100,6 +100,12 @@ class AnprDetection(Base, BaseModel):
     # Timestamps
     processed_at = Column(DateTime(timezone=True), nullable=True)
 
+    # External Server Sync
+    external_vehicle_id = Column(String(100), nullable=True)  # UUID from external ANPR server
+    sync_status = Column(String(20), nullable=True)  # pending / synced / sync_failed
+    sync_retry_count = Column(Integer, default=0, nullable=False)
+    sync_error_message = Column(Text, nullable=True)
+
     # Relationships
     organization = relationship("Organization", back_populates="anpr_detections")
 

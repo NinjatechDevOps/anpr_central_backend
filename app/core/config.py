@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # Google Gemini LLM
     GOOGLE_API_KEY: str = ""  # Set via environment variable
 
+    # External ANPR Server
+    EXTERNAL_SERVER_URL: str = ""
+    EXTERNAL_ADMIN_NAME: str = ""
+    EXTERNAL_ADMIN_PASSWORD: str = ""
+    EXTERNAL_SYNC_ENABLED: bool = False
+
     # Logging
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "logs/central_server.log"
