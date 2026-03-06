@@ -124,7 +124,7 @@ async def upload_anpr_detection(
 
         logger.info(f"Created detection record: id={detection.id}")
 
-        # Queue for async processing
+        # Queue for async LLM processing (external sync fires after LLM success)
         process_anpr_detection.apply_async(
             args=[detection.id],
             queue="anpr_processing"
