@@ -101,6 +101,7 @@ class AnprDetection(Base, BaseModel):
     processed_at = Column(DateTime(timezone=True), nullable=True)
 
     # External Server Sync
+    external_device_id = Column(String(100), nullable=True)  # UUID of device on external server
     external_vehicle_id = Column(String(100), nullable=True)  # UUID from external ANPR server
     sync_status = Column(String(20), nullable=True)  # pending / synced / sync_failed
     sync_retry_count = Column(Integer, default=0, nullable=False)

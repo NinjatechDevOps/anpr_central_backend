@@ -33,6 +33,24 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
 
         return query.order_by(desc(self.model.created_at)).offset(skip).limit(limit).all()
 
+    def get_external_device_id(
+        self,
+        organization_id: int,
+        camera_id: str
+    ) -> Optional[str]:
+        """Get existing external_device_id for a camera in an organization."""
+        result = (
+            self.db.query(self.model.external_device_id)
+            .filter(
+                self.model.organization_id == organization_id,
+                self.model.camera_id == camera_id,
+                self.model.external_device_id.isnot(None)
+            )
+            .limit(1)
+            .scalar()
+        )
+        return result
+
     def get_by_client_detection_id(
         self,
         organization_id: int,

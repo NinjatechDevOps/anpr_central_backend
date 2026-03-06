@@ -52,6 +52,7 @@ celery_app.conf.task_routes = {
     "sync_org_create": {"queue": "external_sync"},
     "sync_org_update": {"queue": "external_sync"},
     "sync_org_delete": {"queue": "external_sync"},
+    "sync_detection": {"queue": "external_sync"},
 }
 
 logger.info("Celery app configured successfully")

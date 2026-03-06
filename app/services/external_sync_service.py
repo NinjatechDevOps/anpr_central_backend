@@ -15,14 +15,21 @@ from app.core.exceptions import ExternalSyncException
 
 
 class ExternalAuthManager:
-    """Handles JWT login, token caching, and thread-safe refresh."""
+    """Handles JWT login, token caching, and thread-safe refresh.
+    If EXTERNAL_ACCESS_TOKEN is set, uses it directly (no login needed).
+    Otherwise falls back to username/password login flow.
+    """
 
     def __init__(self, client: httpx.Client):
         self._client = client
+        self._static_token: Optional[str] = settings.EXTERNAL_ACCESS_TOKEN or None
         self._token: Optional[str] = None
         self._token_acquired_at: float = 0
         self._token_ttl: float = 3500  # refresh before 1hr expiry
         self._lock = threading.Lock()
+
+        if self._static_token:
+            logger.info("External auth: using pre-configured access token")
 
     def login(self) -> str:
         """Login to external server and return JWT token."""
@@ -49,11 +56,16 @@ class ExternalAuthManager:
         return (time.time() - self._token_acquired_at) > self._token_ttl
 
     def get_headers(self) -> dict:
-        """Return auth headers, refreshing token if expired. Thread-safe."""
+        """Return auth headers. Uses static token if available, otherwise login flow."""
+        if self._static_token:
+            logger.info("External auth: using access token (no login required)")
+            return {"Authorization": f"Bearer {self._static_token}"}
         if self._is_token_expired():
             with self._lock:
                 if self._is_token_expired():
+                    logger.info("External auth: token expired or missing, performing login")
                     self.login()
+        logger.info("External auth: using login-based JWT token")
         return {"Authorization": f"Bearer {self._token}"}
 
 
