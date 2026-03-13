@@ -41,13 +41,14 @@ def create_organization(
     summary="Get all organizations"
 )
 def get_organizations(
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    page: int = Query(1, ge=1, description="Page number (starts from 1)"),
+    page_size: int = Query(100, ge=1, le=1000, description="Number of items per page"),
     db: Session = Depends(get_db)
 ):
     """Get all organizations with pagination."""
+    skip = (page - 1) * page_size
     service = OrganizationService(db)
-    return service.get_all_organizations(skip=skip, limit=limit)
+    return service.get_all_organizations(skip=skip, limit=page_size)
 
 
 @router.get(
@@ -57,13 +58,14 @@ def get_organizations(
 )
 def search_organizations(
     q: str = Query(..., min_length=1),
-    skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    page: int = Query(1, ge=1, description="Page number (starts from 1)"),
+    page_size: int = Query(100, ge=1, le=1000, description="Number of items per page"),
     db: Session = Depends(get_db)
 ):
     """Search organizations by name or code."""
+    skip = (page - 1) * page_size
     service = OrganizationService(db)
-    return service.search_organizations(q, skip=skip, limit=limit)
+    return service.search_organizations(q, skip=skip, limit=page_size)
 
 
 @router.get(

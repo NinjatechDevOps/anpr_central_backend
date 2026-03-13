@@ -154,6 +154,13 @@ class AnprDetectionResultResponse(BaseModel):
     }
 
 
+class AnprDetectionListResponse(BaseModel):
+    """Paginated response for detection list."""
+
+    detections: list[AnprDetectionResultResponse] = Field(..., description="List of detections")
+    total: int = Field(..., description="Total number of detections matching filters")
+
+
 class ErrorResponse(BaseModel):
     """Standard error response schema."""
 

@@ -156,6 +156,7 @@ class SystemStatsResponse(BaseModel):
 )
 async def get_system_stats(
     date_filter: Optional[str] = Query("today", description="Date filter: today, yesterday, this_week, this_month, all_time"),
+    organization_id: Optional[int] = Query(None, description="Filter by organization ID"),
     organization: Organization = Depends(verify_super_admin),
     db: Session = Depends(get_db)
 ):
@@ -208,6 +209,10 @@ async def get_system_stats(
         func.sum(case((AnprDetection.activity_type == 'out', 1), else_=0)).label('total_out')
     )
 
+    # Apply organization filter
+    if organization_id:
+        query = query.filter(AnprDetection.organization_id == organization_id)
+
     # Apply date filter
     if start_date:
         query = query.filter(AnprDetection.created_at >= start_date)
@@ -218,6 +223,8 @@ async def get_system_stats(
 
     # Get total unique cameras
     camera_query = db.query(func.count(func.distinct(AnprDetection.camera_id)))
+    if organization_id:
+        camera_query = camera_query.filter(AnprDetection.organization_id == organization_id)
     if start_date:
         camera_query = camera_query.filter(AnprDetection.created_at >= start_date)
         if date_filter == "yesterday":

@@ -13,7 +13,7 @@ from app.db.session import init_db
 
 # Import routers
 from app.api.v1 import organizations
-from app.api.v1.endpoints import anpr, admin, analytics
+from app.api.v1.endpoints import anpr, admin, analytics, cameras
 
 
 @asynccontextmanager
@@ -89,6 +89,12 @@ app.include_router(
     analytics.router,
     prefix=f"{settings.API_V1_PREFIX}/analytics",
     tags=["Analytics"]
+)
+
+app.include_router(
+    cameras.router,
+    prefix=f"{settings.API_V1_PREFIX}/cameras",
+    tags=["Cameras"]
 )
 
 

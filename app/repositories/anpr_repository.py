@@ -178,15 +178,21 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
 
         return query.order_by(desc(self.model.created_at)).limit(limit).all()
 
-    def get_all_with_filters(
+    def _build_filter_query(
         self,
-        skip: int = 0,
-        limit: int = 100,
+        organization_id: Optional[int] = None,
         status: Optional[ProcessingStatus] = None,
-        camera_id: Optional[str] = None
-    ) -> List[AnprDetection]:
-        """Get all detections across all organizations with optional filters (super admin)."""
+        camera_id: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        activity_type: Optional[str] = None,
+        plate: Optional[str] = None
+    ):
+        """Build a base query with common filters."""
         query = self.db.query(self.model)
+
+        if organization_id is not None:
+            query = query.filter(self.model.organization_id == organization_id)
 
         if status:
             query = query.filter(self.model.status == status)
@@ -194,7 +200,65 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
         if camera_id:
             query = query.filter(self.model.camera_id == camera_id)
 
+        if start_date:
+            query = query.filter(self.model.created_at >= start_date)
+
+        if end_date:
+            query = query.filter(self.model.created_at <= end_date)
+
+        if activity_type:
+            query = query.filter(self.model.activity_type == activity_type.lower())
+
+        if plate:
+            query = query.filter(self.model.numberplate_text.ilike(f"%{plate}%"))
+
+        return query
+
+    def get_all_with_filters(
+        self,
+        skip: int = 0,
+        limit: int = 100,
+        status: Optional[ProcessingStatus] = None,
+        camera_id: Optional[str] = None,
+        organization_id: Optional[int] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        activity_type: Optional[str] = None,
+        plate: Optional[str] = None
+    ) -> List[AnprDetection]:
+        """Get all detections with optional filters."""
+        query = self._build_filter_query(
+            organization_id=organization_id,
+            status=status,
+            camera_id=camera_id,
+            start_date=start_date,
+            end_date=end_date,
+            activity_type=activity_type,
+            plate=plate
+        )
         return query.order_by(desc(self.model.created_at)).offset(skip).limit(limit).all()
+
+    def count_with_filters(
+        self,
+        organization_id: Optional[int] = None,
+        status: Optional[ProcessingStatus] = None,
+        camera_id: Optional[str] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        activity_type: Optional[str] = None,
+        plate: Optional[str] = None
+    ) -> int:
+        """Count detections with optional filters."""
+        query = self._build_filter_query(
+            organization_id=organization_id,
+            status=status,
+            camera_id=camera_id,
+            start_date=start_date,
+            end_date=end_date,
+            activity_type=activity_type,
+            plate=plate
+        )
+        return query.count()
 
     def get_filtered_for_report(
         self,
@@ -203,7 +267,9 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
         activity_type: Optional[str] = None,
         date_filter: Optional[str] = None,
         start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None
+        end_date: Optional[datetime] = None,
+        status: Optional[ProcessingStatus] = None,
+        plate: Optional[str] = None
     ) -> List[AnprDetection]:
         """Get filtered detections for reports with date range support."""
         query = self.db.query(self.model).join(self.model.organization)
@@ -219,6 +285,14 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
         # Activity type filter
         if activity_type:
             query = query.filter(self.model.activity_type == activity_type.lower())
+
+        # Status filter
+        if status:
+            query = query.filter(self.model.status == status)
+
+        # Plate search filter
+        if plate:
+            query = query.filter(self.model.numberplate_text.ilike(f"%{plate}%"))
 
         # Date filtering
         now = datetime.utcnow()
@@ -249,11 +323,98 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
 
         return query.order_by(desc(self.model.created_at)).all()
 
+    def get_distinct_cameras(
+        self,
+        organization_id: Optional[int] = None,
+        skip: int = 0,
+        limit: int = 100
+    ) -> List[Dict[str, Any]]:
+        """Get distinct cameras with detection counts."""
+        query = self.db.query(
+            self.model.camera_id,
+            self.model.camera_name,
+            self.model.organization_id,
+            func.count(self.model.id).label('detection_count'),
+            func.max(self.model.created_at).label('last_detection'),
+            func.min(self.model.created_at).label('first_detection')
+        )
+
+        if organization_id:
+            query = query.filter(self.model.organization_id == organization_id)
+
+        result = query.group_by(
+            self.model.camera_id,
+            self.model.camera_name,
+            self.model.organization_id
+        ).order_by(desc('detection_count')).offset(skip).limit(limit).all()
+
+        return [
+            {
+                'camera_id': row.camera_id,
+                'camera_name': row.camera_name or row.camera_id,
+                'organization_id': row.organization_id,
+                'detection_count': row.detection_count or 0,
+                'last_detection': row.last_detection,
+                'first_detection': row.first_detection
+            }
+            for row in result
+        ]
+
+    def count_distinct_cameras(
+        self,
+        organization_id: Optional[int] = None
+    ) -> int:
+        """Count distinct cameras."""
+        query = self.db.query(
+            self.model.camera_id,
+            self.model.organization_id
+        )
+
+        if organization_id:
+            query = query.filter(self.model.organization_id == organization_id)
+
+        return query.group_by(
+            self.model.camera_id,
+            self.model.organization_id
+        ).count()
+
+    def _apply_common_filters(
+        self,
+        query,
+        organization_id: Optional[int] = None,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        camera_id: Optional[str] = None,
+        activity_type: Optional[str] = None,
+        status: Optional[ProcessingStatus] = None,
+        plate: Optional[str] = None
+    ):
+        """Apply common filters to any query (works for aggregate queries too)."""
+        if organization_id:
+            query = query.filter(self.model.organization_id == organization_id)
+        if start_date:
+            query = query.filter(self.model.created_at >= start_date)
+        if end_date:
+            query = query.filter(self.model.created_at <= end_date)
+        if camera_id:
+            query = query.filter(self.model.camera_id == camera_id)
+        if activity_type:
+            query = query.filter(self.model.activity_type == activity_type.lower())
+        if status:
+            query = query.filter(self.model.status == status)
+        if plate:
+            query = query.filter(self.model.numberplate_text.ilike(f"%{plate}%"))
+        return query
+
     def get_hourly_stats(
         self,
         organization_id: Optional[int] = None,
         start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None
+        end_date: Optional[datetime] = None,
+        camera_id: Optional[str] = None,
+        activity_type: Optional[str] = None,
+        status: Optional[ProcessingStatus] = None,
+        plate: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Get hourly detection statistics."""
         from sqlalchemy import extract, case
@@ -267,13 +428,7 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
             func.sum(case((self.model.activity_type == 'out', 1), else_=0)).label('out_count')
         )
 
-        if organization_id:
-            query = query.filter(self.model.organization_id == organization_id)
-
-        if start_date:
-            query = query.filter(self.model.created_at >= start_date)
-        if end_date:
-            query = query.filter(self.model.created_at <= end_date)
+        query = self._apply_common_filters(query, organization_id, start_date, end_date, camera_id, activity_type, status, plate)
 
         result = query.group_by(extract('hour', self.model.created_at)).order_by('hour').all()
 
@@ -292,12 +447,20 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
     def get_daily_stats(
         self,
         organization_id: Optional[int] = None,
-        days: int = 30
+        days: int = 30,
+        start_date: Optional[datetime] = None,
+        end_date: Optional[datetime] = None,
+        camera_id: Optional[str] = None,
+        activity_type: Optional[str] = None,
+        status: Optional[ProcessingStatus] = None,
+        plate: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Get daily detection statistics for the last N days."""
+        """Get daily detection statistics for the last N days or a custom date range."""
         from sqlalchemy import cast, Date, case
 
-        start_date = datetime.utcnow() - timedelta(days=days)
+        # Use custom date range if provided, otherwise fall back to days
+        if not start_date:
+            start_date = datetime.utcnow() - timedelta(days=days)
 
         query = self.db.query(
             cast(self.model.created_at, Date).label('date'),
@@ -308,8 +471,7 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
             func.sum(case((self.model.activity_type == 'out', 1), else_=0)).label('out_count')
         ).filter(self.model.created_at >= start_date)
 
-        if organization_id:
-            query = query.filter(self.model.organization_id == organization_id)
+        query = self._apply_common_filters(query, organization_id, None, end_date, camera_id, activity_type, status, plate)
 
         result = query.group_by(cast(self.model.created_at, Date)).order_by('date').all()
 
@@ -329,7 +491,11 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
     def get_weekly_stats(
         self,
         organization_id: Optional[int] = None,
-        weeks: int = 12
+        weeks: int = 12,
+        camera_id: Optional[str] = None,
+        activity_type: Optional[str] = None,
+        status: Optional[ProcessingStatus] = None,
+        plate: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Get weekly detection statistics for the last N weeks."""
         from sqlalchemy import extract, case
@@ -346,8 +512,7 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
             func.sum(case((self.model.activity_type == 'out', 1), else_=0)).label('out_count')
         ).filter(self.model.created_at >= start_date)
 
-        if organization_id:
-            query = query.filter(self.model.organization_id == organization_id)
+        query = self._apply_common_filters(query, organization_id, None, None, camera_id, activity_type, status, plate)
 
         result = query.group_by(
             extract('year', self.model.created_at),
@@ -371,7 +536,11 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
     def get_monthly_stats(
         self,
         organization_id: Optional[int] = None,
-        months: int = 12
+        months: int = 12,
+        camera_id: Optional[str] = None,
+        activity_type: Optional[str] = None,
+        status: Optional[ProcessingStatus] = None,
+        plate: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Get monthly detection statistics for the last N months."""
         from sqlalchemy import extract, case
@@ -388,8 +557,7 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
             func.sum(case((self.model.activity_type == 'out', 1), else_=0)).label('out_count')
         ).filter(self.model.created_at >= start_date)
 
-        if organization_id:
-            query = query.filter(self.model.organization_id == organization_id)
+        query = self._apply_common_filters(query, organization_id, None, None, camera_id, activity_type, status, plate)
 
         result = query.group_by(
             extract('year', self.model.created_at),
@@ -414,7 +582,11 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
         self,
         organization_id: Optional[int] = None,
         start_date: Optional[datetime] = None,
-        end_date: Optional[datetime] = None
+        end_date: Optional[datetime] = None,
+        camera_id: Optional[str] = None,
+        activity_type: Optional[str] = None,
+        status: Optional[ProcessingStatus] = None,
+        plate: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Get vehicle type distribution statistics."""
         query = self.db.query(
@@ -422,13 +594,7 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
             func.count(self.model.id).label('count')
         ).filter(self.model.vehicle_class.isnot(None))
 
-        if organization_id:
-            query = query.filter(self.model.organization_id == organization_id)
-
-        if start_date:
-            query = query.filter(self.model.created_at >= start_date)
-        if end_date:
-            query = query.filter(self.model.created_at <= end_date)
+        query = self._apply_common_filters(query, organization_id, start_date, end_date, camera_id, activity_type, status, plate)
 
         result = query.group_by(self.model.vehicle_class).order_by(desc('count')).all()
 
@@ -445,7 +611,11 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
         organization_id: Optional[int] = None,
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
-        limit: int = 10
+        limit: int = 10,
+        camera_id: Optional[str] = None,
+        activity_type: Optional[str] = None,
+        status: Optional[ProcessingStatus] = None,
+        plate: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """Get top performing cameras by detection count."""
         from sqlalchemy import case
@@ -458,13 +628,7 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
             func.sum(case((self.model.status == ProcessingStatus.FAILED, 1), else_=0)).label('failed')
         )
 
-        if organization_id:
-            query = query.filter(self.model.organization_id == organization_id)
-
-        if start_date:
-            query = query.filter(self.model.created_at >= start_date)
-        if end_date:
-            query = query.filter(self.model.created_at <= end_date)
+        query = self._apply_common_filters(query, organization_id, start_date, end_date, camera_id, activity_type, status, plate)
 
         result = query.group_by(
             self.model.camera_id,
