@@ -197,12 +197,16 @@ def sync_detection(self, detection_id: int):
                 organization_id=external_org_id,
             )
 
-        # 4. Read image and encode to base64
+        # 4. Read image and encode to base64 data URI
         image_full_path = os.path.join(settings.UPLOAD_DIR, detection.image_path)
         vehicle_image_b64 = None
         if os.path.exists(image_full_path):
             with open(image_full_path, "rb") as f:
-                vehicle_image_b64 = base64.b64encode(f.read()).decode("utf-8")
+                raw_b64 = base64.b64encode(f.read()).decode("utf-8")
+                # External server expects data URI format
+                ext = os.path.splitext(image_full_path)[1].lower()
+                mime = "image/png" if ext == ".png" else "image/jpeg"
+                vehicle_image_b64 = f"data:{mime};base64,{raw_b64}"
 
         # 5. Get numberplate from LLM results if available, otherwise send empty
         number_plate = ""

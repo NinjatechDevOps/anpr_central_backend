@@ -31,23 +31,44 @@ class ExternalAuthManager:
         if self._static_token:
             logger.info("External auth: using pre-configured access token")
 
-    def login(self) -> str:
-        """Login to external server and return JWT token."""
+    def fetch_token(self) -> str:
+        """
+        Call the login endpoint and set the JWT token.
+        Equivalent to:
+          curl -X POST {EXTERNAL_SERVER_URL}/api/v1/organization/login
+               -H 'Content-Type: application/json'
+               -d '{"name": "...", "password": "..."}'
+        Returns the JWT token string.
+        """
         url = ExternalEndpoint.ORG_LOGIN.external_url()
         payload = {
             "name": settings.EXTERNAL_ADMIN_NAME,
             "password": settings.EXTERNAL_ADMIN_PASSWORD,
         }
-        logger.info(f"External auth: logging in to {url}")
-        response = self._client.post(url, json=payload)
+        # logger.info(f"External auth: fetching token from {url} with user={settings.EXTERNAL_ADMIN_NAME}")
+        response = self._client.post(url, json=payload, headers={
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        })
 
         if response.status_code != 200:
+            logger.error(f"External auth: login failed status={response.status_code} body={response.text}")
             raise ExternalSyncException("ORG_LOGIN", response.status_code, response.text)
 
         data = response.json()
-        self._token = data["token"]
+        # Support nested response: {data: {token: "..."}} or flat: {token: "..."}
+        token = (
+            data.get("token")
+            or (data.get("data", {}) or {}).get("token")
+            or data.get("accessToken")
+            or data.get("access_token")
+        )
+        if not token:
+            raise ExternalSyncException("ORG_LOGIN", 200, "No token in response")
+
+        self._token = token
         self._token_acquired_at = time.time()
-        logger.info("External auth: login successful")
+        logger.info(f"External auth: token fetched successfully (expires in ~{self._token_ttl}s)")
         return self._token
 
     def _is_token_expired(self) -> bool:
@@ -56,15 +77,19 @@ class ExternalAuthManager:
         return (time.time() - self._token_acquired_at) > self._token_ttl
 
     def get_headers(self) -> dict:
-        """Return auth headers. Uses static token if available, otherwise login flow."""
+        """
+        Return auth headers.
+        Priority: EXTERNAL_ACCESS_TOKEN (static) > login-based JWT token.
+        Auto-refreshes login token when expired.
+        """
         if self._static_token:
             logger.info("External auth: using access token (no login required)")
             return {"Authorization": f"Bearer {self._static_token}"}
         if self._is_token_expired():
             with self._lock:
                 if self._is_token_expired():
-                    logger.info("External auth: token expired or missing, performing login")
-                    self.login()
+                    logger.info("External auth: token expired or missing, calling fetch_token()")
+                    self.fetch_token()
         logger.info("External auth: using login-based JWT token")
         return {"Authorization": f"Bearer {self._token}"}
 
@@ -93,8 +118,11 @@ class ExternalOrgService:
             raise ExternalSyncException("ORG_CREATE", response.status_code, response.text)
 
         data = response.json()
-        ext_id = str(data["id"])
-        logger.info(f"External org created: {ext_id}")
+        # logger.debug(f"External org create response: {data}")
+        # Response is nested: {data: {id: "..."}, message: "...", status: "..."}
+        org_data = data.get("data", data)
+        ext_id = str(org_data["id"])
+        # logger.info(f"External org created: {ext_id}")
         return ext_id
 
     def update(self, external_org_id: str, name: Optional[str] = None,
@@ -114,7 +142,7 @@ class ExternalOrgService:
         if is_deleted is not None:
             payload["isDeleted"] = is_deleted
 
-        logger.info(f"External org update: {external_org_id}")
+        # logger.info(f"External org update: {external_org_id}")
         response = self._client.put(url, json=payload, headers=self._auth.get_headers())
 
         if response.status_code != 200:
@@ -125,7 +153,7 @@ class ExternalOrgService:
     def delete(self, external_org_id: str) -> bool:
         """Delete organization on external server."""
         url = ExternalEndpoint.ORG_DELETE.external_url(id=external_org_id)
-        logger.info(f"External org delete: {external_org_id}")
+        # logger.info(f"External org delete: {external_org_id}")
         response = self._client.delete(url, headers=self._auth.get_headers())
 
         if response.status_code != 200:
@@ -179,8 +207,10 @@ class ExternalDeviceService:
             raise ExternalSyncException("DEVICE_CREATE", response.status_code, response.text)
 
         data = response.json()
-        ext_id = str(data["id"])
-        logger.info(f"External device created: {ext_id}")
+        # Response is nested: {data: {id: "..."}, message: "...", status: "..."}
+        device_data = data.get("data", data)
+        ext_id = str(device_data["id"])
+        # logger.info(f"External device created: {ext_id}")
         return ext_id
 
     def update(self, external_device_id: str, name: Optional[str] = None,
@@ -198,7 +228,7 @@ class ExternalDeviceService:
         if status is not None:
             payload["status"] = status
 
-        logger.info(f"External device update: {external_device_id}")
+        # logger.info(f"External device update: {external_device_id}")
         response = self._client.put(url, json=payload, headers=self._auth.get_headers())
 
         if response.status_code != 200:
@@ -209,7 +239,7 @@ class ExternalDeviceService:
     def delete(self, external_device_id: str) -> bool:
         """Delete device on external server."""
         url = ExternalEndpoint.DEVICE_DELETE.external_url(id=external_device_id)
-        logger.info(f"External device delete: {external_device_id}")
+        # logger.info(f"External device delete: {external_device_id}")
         response = self._client.delete(url, headers=self._auth.get_headers())
 
         if response.status_code != 200:
@@ -264,15 +294,23 @@ class ExternalVehicleService:
             "isSentBack": is_sent_back,
             "isUpdated": is_updated,
         }
-        logger.info(f"External vehicle create: plate={number_plate}")
+        # # Log payload with truncated image fields to avoid flooding logs
+        # log_payload = {
+        #     **payload,
+        #     "numberPlateImage": f"<base64 {len(number_plate_image)} chars>" if number_plate_image else None,
+        #     "vehicleImage": f"<base64 {len(vehicle_image)} chars>" if vehicle_image else None,
+        # }
+        # logger.info(f"External vehicle create: plate={number_plate}, payload={log_payload}")
         response = self._client.post(url, json=payload, headers=self._auth.get_headers())
 
         if response.status_code not in (200, 201):
             raise ExternalSyncException("VEHICLE_CREATE", response.status_code, response.text)
 
         data = response.json()
-        ext_id = str(data["id"])
-        logger.info(f"External vehicle created: {ext_id}")
+        # Response is nested: {data: {id: "..."}, message: "...", status: "..."}
+        vehicle_data = data.get("data", data)
+        ext_id = str(vehicle_data["id"])
+        # logger.info(f"External vehicle created: {ext_id}")
         return ext_id
 
     def update(self, external_vehicle_id: str, number_plate: Optional[str] = None,
@@ -300,7 +338,7 @@ class ExternalVehicleService:
         if is_updated is not None:
             payload["isUpdated"] = is_updated
 
-        logger.info(f"External vehicle update: {external_vehicle_id}")
+        # logger.info(f"External vehicle update: {external_vehicle_id}")
         response = self._client.put(url, json=payload, headers=self._auth.get_headers())
 
         if response.status_code != 200:
