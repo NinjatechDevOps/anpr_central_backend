@@ -18,6 +18,7 @@ from app.repositories.anpr_repository import AnprDetectionRepository
 from app.schemas.anpr_schemas import (
     AnprDetectionUploadResponse,
     AnprDetectionResultResponse,
+    AnprDetectionListResponse,
     ErrorResponse
 )
 from app.services.storage_service import get_storage_service
@@ -274,15 +275,19 @@ async def get_detection_by_client_id(
 
 @router.get(
     "/detections",
-    response_model=List[AnprDetectionResultResponse],
+    response_model=AnprDetectionListResponse,
     summary="List detections",
     description="Get paginated list of detections. Super admin can view all orgs, regular users see only their data."
 )
 async def list_detections(
-    skip: int = 0,
-    limit: int = 100,
-    status_filter: Optional[ProcessingStatus] = None,
-    camera_id: Optional[str] = None,
+    page: int = Query(1, ge=1, description="Page number (starts from 1)"),
+    page_size: int = Query(100, ge=1, le=100, description="Number of items per page (max 100)"),
+    status_filter: Optional[ProcessingStatus] = Query(None, description="Filter by processing status"),
+    camera_id: Optional[str] = Query(None, description="Filter by camera ID"),
+    activity_type: Optional[str] = Query(None, description="Filter by activity type (in/out)"),
+    plate: Optional[str] = Query(None, description="Search by numberplate text (partial match)"),
+    start_date: Optional[datetime] = Query(None, description="Start date filter (ISO format)"),
+    end_date: Optional[datetime] = Query(None, description="End date filter (ISO format)"),
     org_filter: Optional[int] = Depends(get_org_filter),
     db: Session = Depends(get_db)
 ):
@@ -296,73 +301,72 @@ async def list_detections(
     - X-API-Token header with valid organization token
 
     Query parameters:
-    - skip: Number of records to skip (pagination)
-    - limit: Maximum records to return (max 100)
+    - page: Page number (starts from 1)
+    - page_size: Number of items per page (max 100)
     - status_filter: Filter by processing status
     - camera_id: Filter by camera ID
+    - start_date: Start date filter (ISO format)
+    - end_date: End date filter (ISO format)
     - organization_id: Filter by org ID (super admin only)
 
-    Returns paginated list of detections.
+    Returns paginated list of detections with total count.
     """
-    if limit > 100:
-        limit = 100
+    skip = (page - 1) * page_size
 
     repo = AnprDetectionRepository(db)
 
-    # Get detections based on filter
-    if org_filter is not None:
-        # Filtered to specific org (regular user or super admin filtering)
-        if camera_id:
-            detections = repo.get_by_camera(
-                organization_id=org_filter,
-                camera_id=camera_id,
-                skip=skip,
-                limit=limit,
-                status=status_filter
-            )
-        else:
-            detections = repo.get_by_organization(
-                organization_id=org_filter,
-                skip=skip,
-                limit=limit,
-                status=status_filter
-            )
-    else:
-        # Super admin viewing all orgs
-        detections = repo.get_all_with_filters(
-            skip=skip,
-            limit=limit,
-            status=status_filter,
-            camera_id=camera_id
-        )
+    # Get detections and count using unified filter method
+    detections = repo.get_all_with_filters(
+        skip=skip,
+        limit=page_size,
+        status=status_filter,
+        camera_id=camera_id,
+        organization_id=org_filter,
+        start_date=start_date,
+        end_date=end_date,
+        activity_type=activity_type,
+        plate=plate
+    )
+    total = repo.count_with_filters(
+        organization_id=org_filter,
+        status=status_filter,
+        camera_id=camera_id,
+        start_date=start_date,
+        end_date=end_date,
+        activity_type=activity_type,
+        plate=plate
+    )
 
-    return [
-        AnprDetectionResultResponse(
-            detection_id=d.id,
-            client_detection_id=d.client_detection_id,
-            organization_id=d.organization_id,
-            organization_name=d.organization.name if d.organization else None,
-            camera_id=d.camera_id,
-            camera_name=d.camera_name,
-            object_type=d.vehicle_class,
-            vehicle_track_id=d.vehicle_track_id,
-            activity_type=d.activity_type,
-            detected_at=d.detected_at,
-            image_url=f"/uploads/{d.image_path}" if d.image_path else None,
-            status=d.status,
-            retry_count=d.retry_count,
-            error_message=d.error_message,
-            created_at=d.created_at,
-            updated_at=d.updated_at,
-            numberplate_available=d.numberplate_available,
-            numberplate_text=d.numberplate_text,
-            numberplate_color=d.numberplate_color,
-            vehicle_side=d.vehicle_side,
-            llm_confidence=d.llm_confidence,
-            llm_reasoning=d.llm_raw_response
-        )
-        for d in detections
-    ]
+    return AnprDetectionListResponse(
+        detections=[
+            AnprDetectionResultResponse(
+                detection_id=d.id,
+                client_detection_id=d.client_detection_id,
+                organization_id=d.organization_id,
+                organization_name=d.organization.name if d.organization else None,
+                camera_id=d.camera_id,
+                camera_name=d.camera_name,
+                object_type=d.vehicle_class,
+                vehicle_track_id=d.vehicle_track_id,
+                activity_type=d.activity_type,
+                detected_at=d.detected_at,
+                image_url=f"/uploads/{d.image_path}" if d.image_path else None,
+                status=d.status,
+                retry_count=d.retry_count,
+                error_message=d.error_message,
+                created_at=d.created_at,
+                updated_at=d.updated_at,
+                numberplate_available=d.numberplate_available,
+                numberplate_text=d.numberplate_text,
+                numberplate_color=d.numberplate_color,
+                vehicle_side=d.vehicle_side,
+                llm_confidence=d.llm_confidence,
+                llm_reasoning=d.llm_raw_response
+            )
+            for d in detections
+        ],
+        total=total
+    )
 
 
 @router.get(
@@ -377,6 +381,8 @@ async def export_detections_report(
     organization_id: Optional[int] = Query(None, description="Filter by organization ID"),
     camera_id: Optional[str] = Query(None, description="Filter by camera ID"),
     activity_type: Optional[str] = Query(None, description="Filter by activity type (in/out)"),
+    status_filter: Optional[ProcessingStatus] = Query(None, description="Filter by processing status"),
+    plate: Optional[str] = Query(None, description="Search by numberplate text (partial match)"),
     timezone_offset: Optional[int] = Query(0, description="Timezone offset in minutes from UTC (e.g., 330 for IST, -300 for EST)"),
     db: Session = Depends(get_db)
 ):
@@ -403,7 +409,9 @@ async def export_detections_report(
             activity_type=activity_type,
             date_filter=date_filter,
             start_date=start_date,
-            end_date=end_date
+            end_date=end_date,
+            status=status_filter,
+            plate=plate
         )
 
         logger.info(f"Found {len(detections)} detections for export")
