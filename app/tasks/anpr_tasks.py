@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime
 
 from app.core.celery_app import celery_app
+from app.core.config import settings
 from app.core.logging import app_logger as logger
 from app.db.session import SessionLocal
 from app.models.anpr_detection import AnprDetection, ProcessingStatus
@@ -76,29 +77,42 @@ def process_anpr_detection(self, detection_id: int):
         db.commit()
         logger.info(f"Detection {detection_id} status updated to PROCESSING")
 
-        # Step 3: Validate image exists
-        # Image path is already in detection.image_path
-        llm_service = get_llm_service()
-        if not llm_service.validate_image(detection.image_path):
-            raise ValueError(f"Invalid or corrupted image: {detection.image_path}")
+        # Step 3 & 4: LLM extraction (skipped if GOOGLE_API_KEY is not configured)
+        if not settings.GOOGLE_API_KEY:
+            logger.warning(
+                f"GOOGLE_API_KEY not set — skipping LLM for detection {detection_id}, "
+                "proceeding directly to external sync"
+            )
+            update_data = {
+                "status": ProcessingStatus.SUCCESS,
+                "processed_at": datetime.utcnow(),
+                "numberplate_available": False,
+                "numberplate_text": None,
+                "numberplate_color": "unknown",
+                "vehicle_side": "unknown",
+                "llm_confidence": "0.0",
+                "llm_raw_response": None,
+            }
+        else:
+            llm_service = get_llm_service()
+            if not llm_service.validate_image(detection.image_path):
+                raise ValueError(f"Invalid or corrupted image: {detection.image_path}")
 
-        # Step 4: Send to LLM for numberplate extraction
-        logger.info(f"Calling LLM service for detection {detection_id}")
-        llm_result = llm_service.extract_numberplate(
-            image_path=detection.image_path
-        )
+            logger.info(f"Calling LLM service for detection {detection_id}")
+            llm_result = llm_service.extract_numberplate(
+                image_path=detection.image_path
+            )
 
-        # Step 5: Update database with LLM results
-        update_data = {
-            "status": ProcessingStatus.SUCCESS,
-            "processed_at": datetime.utcnow(),
-            "numberplate_available": llm_result.numberplate_available if llm_result else False,
-            "numberplate_text": llm_result.numberplate_text if llm_result and llm_result.numberplate_text else "N/A",
-            "numberplate_color": llm_result.numberplate_color if llm_result and llm_result.numberplate_color else "N/A",
-            "vehicle_side": llm_result.vehicle_side if llm_result and llm_result.vehicle_side else "N/A",
-            "llm_confidence": str(llm_result.confidence_score) if llm_result else "0.0",
-            "llm_raw_response": llm_result.reasoning if llm_result and llm_result.reasoning else "N/A",
-        }
+            update_data = {
+                "status": ProcessingStatus.SUCCESS,
+                "processed_at": datetime.utcnow(),
+                "numberplate_available": llm_result.numberplate_available if llm_result else False,
+                "numberplate_text": llm_result.numberplate_text if llm_result and llm_result.numberplate_text else "N/A",
+                "numberplate_color": llm_result.numberplate_color if llm_result and llm_result.numberplate_color else "N/A",
+                "vehicle_side": llm_result.vehicle_side if llm_result and llm_result.vehicle_side else "N/A",
+                "llm_confidence": str(llm_result.confidence_score) if llm_result else "0.0",
+                "llm_raw_response": llm_result.reasoning if llm_result and llm_result.reasoning else "N/A",
+            }
 
         repo.update(detection_id, update_data)
         db.commit()
