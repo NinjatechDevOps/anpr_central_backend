@@ -48,7 +48,7 @@ class Settings(BaseSettings):
     EXTERNAL_ADMIN_NAME: str = ""
     EXTERNAL_ADMIN_PASSWORD: str = ""
     EXTERNAL_ACCESS_TOKEN: str = ""  # If set, skip login and use this token directly
-    EXTERNAL_SYNC_ENABLED: bool = False
+    EXTERNAL_SYNC_ENABLED: bool = True  # Enable or disable syncing with external server
 
     # Logging
     LOG_LEVEL: str = "INFO"
