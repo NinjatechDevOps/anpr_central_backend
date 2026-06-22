@@ -134,11 +134,16 @@ def sync_detections(force: bool = False, dry_run: bool = False):
                     llm_note = "LLM skipped (no key)"
 
                     # Step 1 — Optional LLM
-                    if settings.GOOGLE_API_KEY:
+                    # Skip if numberplate data already exists (already processed)
+                    already_processed = detection.processed_at is not None
+                    if settings.GOOGLE_API_KEY and not already_processed:
                         try:
                             llm_note = run_llm(detection, db, det_repo)
                         except Exception as llm_err:
                             llm_note = f"LLM failed ({llm_err})"
+                    elif already_processed:
+                        plate = detection.numberplate_text if detection.numberplate_available else "none"
+                        llm_note = f"LLM skipped (already processed, plate={plate})"
 
                     # Step 2 — Device (find or create)
                     cache_key = (org.id, detection.camera_id)
