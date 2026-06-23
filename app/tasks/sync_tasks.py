@@ -162,6 +162,10 @@ def sync_detection(self, detection_id: int):
             logger.info(f"External sync disabled, skipping detection {detection_id}")
             return {"status": "skipped", "detection_id": detection_id}
 
+        if not settings.EXTERNAL_DETECTION_SYNC_ENABLED:
+            logger.info(f"Detection sync disabled (EXTERNAL_DETECTION_SYNC_ENABLED=false), skipping detection {detection_id}")
+            return {"status": "skipped", "detection_id": detection_id}
+
         db = self.db
         repo = AnprDetectionRepository(db)
         org_repo = OrganizationRepository(db)

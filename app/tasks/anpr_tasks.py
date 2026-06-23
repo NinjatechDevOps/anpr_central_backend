@@ -120,9 +120,12 @@ def process_anpr_detection(self, detection_id: int):
         logger.info(f"Detection {detection_id} processed successfully")
 
         # Queue external sync now that LLM results are available
-        from app.tasks.sync_tasks import sync_detection
-        sync_detection.delay(detection_id)
-        logger.info(f"Queued detection {detection_id} for external sync")
+        if settings.EXTERNAL_DETECTION_SYNC_ENABLED:
+            from app.tasks.sync_tasks import sync_detection
+            sync_detection.delay(detection_id)
+            logger.info(f"Queued detection {detection_id} for external sync")
+        else:
+            logger.info(f"Detection sync disabled (EXTERNAL_DETECTION_SYNC_ENABLED=false), skipping external sync for detection {detection_id}")
 
         return {"status": "success", "detection_id": detection_id}
 
