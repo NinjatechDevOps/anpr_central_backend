@@ -167,13 +167,13 @@ def get_image_b64(image_path: str):
 
 def get_number_plate(detection: AnprDetection) -> str:
     """Extract number plate string from detection."""
-    if (
-        detection.numberplate_available
-        and detection.numberplate_text
-        and detection.numberplate_text != "N/A"
-    ):
-        return detection.numberplate_text
-    return ""
+    # if (
+    #     detection.numberplate_available
+    #     and detection.numberplate_text
+    #     and detection.numberplate_text != "N/A"
+    # ):
+    #     return detection.numberplate_text
+    return detection.numberplate_text
 
 
 def run_llm(detection: AnprDetection, db, repo: AnprDetectionRepository) -> str:
