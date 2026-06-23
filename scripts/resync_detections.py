@@ -304,7 +304,13 @@ def resync_detections(org_id: int = None, dry_run: bool = False, skip_llm: bool 
                                 detection.external_vehicle_id
                             )
 
-                            if not vehicle_data or not vehicle_data.get("id"):
+                            # Unwrap nested {"data": {...}} or use flat response directly
+                            actual_vehicle = (
+                                vehicle_data.get("data", vehicle_data)
+                                if isinstance(vehicle_data, dict) else None
+                            )
+
+                            if not actual_vehicle or not actual_vehicle.get("id"):
                                 # 200 but data is null — update with current detection data
                                 logger.warning(
                                     f"│    [1] Vehicle FOUND (200) but data is NULL. "
@@ -313,7 +319,6 @@ def resync_detections(org_id: int = None, dry_run: bool = False, skip_llm: bool 
 
                                 if dry_run:
                                     logger.info(f"│    DRY RUN — would update vehicle. Skipping.")
-                                    count_updated_null += 1
                                     continue
 
                                 # Run LLM if needed
