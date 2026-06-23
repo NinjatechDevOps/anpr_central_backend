@@ -230,8 +230,9 @@ def resync_detections(org_id: int = None, dry_run: bool = False, skip_llm: bool 
         # Counters
         total_orgs = 0
         total_detections = 0
-        count_found_on_external = 0   # vehicle GET succeeded → skipped
-        count_recreated = 0           # vehicle GET failed → recreated
+        count_found_on_external = 0   # vehicle GET succeeded with data → skipped
+        count_updated_null = 0        # vehicle GET returned 200 but data null → updated
+        count_recreated = 0           # vehicle GET failed (404) → recreated
         count_created_fresh = 0       # no external_vehicle_id → created new
         count_failed = 0
 
@@ -299,14 +300,80 @@ def resync_detections(org_id: int = None, dry_run: bool = False, skip_llm: bool 
                             f"Calling find_one on external server..."
                         )
                         try:
-                            sync_service.vehicle.find_one(detection.external_vehicle_id)
-                            # Vehicle found — skip entirely, no DB update
-                            logger.info(
-                                f"│    [1] Vehicle FOUND on external server. "
-                                f"Skipping — no action needed."
+                            vehicle_data = sync_service.vehicle.find_one(
+                                detection.external_vehicle_id
                             )
-                            count_found_on_external += 1
-                            continue
+
+                            if not vehicle_data or not vehicle_data.get("id"):
+                                # 200 but data is null — update with current detection data
+                                logger.warning(
+                                    f"│    [1] Vehicle FOUND (200) but data is NULL. "
+                                    f"Will update with current detection data."
+                                )
+
+                                if dry_run:
+                                    logger.info(f"│    DRY RUN — would update vehicle. Skipping.")
+                                    count_updated_null += 1
+                                    continue
+
+                                # Run LLM if needed
+                                llm_note_u = "LLM skipped (no key)"
+                                if not skip_llm and settings.GOOGLE_API_KEY:
+                                    already_processed = detection.processed_at is not None
+                                    if already_processed:
+                                        plate_u = detection.numberplate_text if detection.numberplate_available else "none"
+                                        llm_note_u = f"LLM skipped (already processed, plate={plate_u})"
+                                    else:
+                                        try:
+                                            llm_note_u = run_llm(detection, db, AnprDetectionRepository(db))
+                                        except Exception as llm_err:
+                                            llm_note_u = f"LLM failed ({llm_err})"
+                                elif skip_llm:
+                                    llm_note_u = "LLM skipped (--skip-llm)"
+                                logger.info(f"│    [1-u] LLM: {llm_note_u}")
+
+                                # Load image
+                                vehicle_image_b64_u = get_image_b64(detection.image_path)
+                                if vehicle_image_b64_u:
+                                    logger.info(f"│    [1-u] Image loaded (path={detection.image_path})")
+                                else:
+                                    logger.warning(f"│    [1-u] Image missing (path={detection.image_path}). Proceeding without image.")
+
+                                number_plate_u = get_number_plate(detection)
+                                device_name_u = detection.camera_name or detection.camera_id
+                                logger.info(
+                                    f"│    [1-u] Updating vehicle on external "
+                                    f"(plate='{number_plate_u or 'none'}')..."
+                                )
+                                sync_service.vehicle.update(
+                                    external_vehicle_id=detection.external_vehicle_id,
+                                    number_plate=number_plate_u,
+                                    vehicle_type=detection.vehicle_class,
+                                    device_name=device_name_u,
+                                    report_id=str(detection.id),
+                                    number_plate_image=vehicle_image_b64_u,
+                                    vehicle_image=vehicle_image_b64_u,
+                                )
+                                logger.info(
+                                    f"│    [1-u] Vehicle updated. "
+                                    f"external_vehicle_id={detection.external_vehicle_id} unchanged."
+                                )
+                                AnprDetectionRepository(db).update(detection.id, {
+                                    "sync_status": "resynced",
+                                })
+                                db.commit()
+                                logger.info(f"│    [1-u] DB updated — sync_status=resynced")
+                                count_updated_null += 1
+                                continue
+
+                            else:
+                                # 200 with valid data — nothing to do
+                                logger.info(
+                                    f"│    [1] Vehicle FOUND with data. "
+                                    f"Skipping — no action needed."
+                                )
+                                count_found_on_external += 1
+                                continue
 
                         except ExternalSyncException as e:
                             logger.warning(
@@ -470,6 +537,7 @@ def resync_detections(org_id: int = None, dry_run: bool = False, skip_llm: bool 
         logger.info(f"  Orgs processed             : {total_orgs}")
         logger.info(f"  Total detections            : {total_detections}")
         logger.info(f"  Found on external (skipped) : {count_found_on_external}")
+        logger.info(f"  Updated (found, data null)  : {count_updated_null}")
         logger.info(f"  Recreated (old id invalid)  : {count_recreated}")
         logger.info(f"  Created fresh (no prior id) : {count_created_fresh}")
         logger.info(f"  Failed                      : {count_failed}")
