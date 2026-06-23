@@ -47,6 +47,8 @@ def _to_detection_response(detection, serial_no: int) -> StaticDetectionResponse
         llm_confidence=detection.llm_confidence,
         llm_reasoning=detection.llm_raw_response,
         serial_no=serial_no,
+        is_deleted=detection.is_deleted,
+        deleted_status="Deleted" if detection.is_deleted else "Active",
     )
 
 
@@ -135,6 +137,37 @@ async def get_detection_static(
         )
 
     return _to_detection_response(detection, serial_no=detection.id)
+
+
+@router.delete(
+    "/detection/{detection_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete detection (public)",
+    description="Delete an ANPR detection record by ID. No authentication required."
+)
+async def delete_detection_static(
+    detection_id: int,
+    db: Session = Depends(get_db)
+):
+    """Delete an ANPR detection record permanently."""
+    repo = AnprDetectionRepository(db)
+    detection = repo.get_by_id(detection_id)
+
+    if not detection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Detection {detection_id} not found"
+        )
+
+    try:
+        repo.update(detection_id, {"is_deleted": True})
+        logger.info(f"Detection soft-deleted: id={detection_id}")
+    except Exception as e:
+        logger.error(f"Failed to soft-delete detection {detection_id}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete detection: {str(e)}"
+        )
 
 
 @router.put(

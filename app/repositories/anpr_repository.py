@@ -213,8 +213,8 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
         if plate:
             query = query.filter(self.model.numberplate_text.ilike(f"%{plate}%"))
 
-        if numberplate_not_null:
-            query = query.filter(self.model.numberplate_text.isnot(None))
+        # if numberplate_not_null:
+        #     query = query.filter(self.model.numberplate_text.isnot(None))
 
         return query
 

@@ -162,8 +162,10 @@ class AnprDetectionListResponse(BaseModel):
 
 
 class StaticDetectionResponse(AnprDetectionResultResponse):
-    """Detection response with serial number for public/static endpoints."""
+    """Detection response with serial number and soft-delete status for public/static endpoints."""
     serial_no: int = Field(..., description="1-based serial number within the current page")
+    is_deleted: bool = Field(..., description="Whether this record has been soft-deleted")
+    deleted_status: str = Field(..., description="Human-readable delete status: Active or Deleted")
 
 
 class StaticDetectionListResponse(BaseModel):
