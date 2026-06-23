@@ -100,6 +100,9 @@ class AnprDetection(Base, BaseModel):
     # Timestamps
     processed_at = Column(DateTime(timezone=True), nullable=True)
 
+    # Soft Delete
+    is_deleted = Column(Boolean, default=False, nullable=False, index=True)
+
     # External Server Sync
     external_device_id = Column(String(100), nullable=True)  # UUID of device on external server
     external_vehicle_id = Column(String(100), nullable=True)  # UUID from external ANPR server
