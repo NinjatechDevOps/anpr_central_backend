@@ -186,7 +186,8 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         activity_type: Optional[str] = None,
-        plate: Optional[str] = None
+        plate: Optional[str] = None,
+        numberplate_not_null: bool = False
     ):
         """Build a base query with common filters."""
         query = self.db.query(self.model)
@@ -212,6 +213,9 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
         if plate:
             query = query.filter(self.model.numberplate_text.ilike(f"%{plate}%"))
 
+        if numberplate_not_null:
+            query = query.filter(self.model.numberplate_text.isnot(None))
+
         return query
 
     def get_all_with_filters(
@@ -224,7 +228,8 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         activity_type: Optional[str] = None,
-        plate: Optional[str] = None
+        plate: Optional[str] = None,
+        numberplate_not_null: bool = False
     ) -> List[AnprDetection]:
         """Get all detections with optional filters."""
         query = self._build_filter_query(
@@ -234,7 +239,8 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
             start_date=start_date,
             end_date=end_date,
             activity_type=activity_type,
-            plate=plate
+            plate=plate,
+            numberplate_not_null=numberplate_not_null
         )
         return query.order_by(desc(self.model.created_at)).offset(skip).limit(limit).all()
 
@@ -246,7 +252,8 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
         start_date: Optional[datetime] = None,
         end_date: Optional[datetime] = None,
         activity_type: Optional[str] = None,
-        plate: Optional[str] = None
+        plate: Optional[str] = None,
+        numberplate_not_null: bool = False
     ) -> int:
         """Count detections with optional filters."""
         query = self._build_filter_query(
@@ -256,7 +263,8 @@ class AnprDetectionRepository(BaseRepository[AnprDetection]):
             start_date=start_date,
             end_date=end_date,
             activity_type=activity_type,
-            plate=plate
+            plate=plate,
+            numberplate_not_null=numberplate_not_null
         )
         return query.count()
 

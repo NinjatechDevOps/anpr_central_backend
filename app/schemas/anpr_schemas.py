@@ -161,6 +161,30 @@ class AnprDetectionListResponse(BaseModel):
     total: int = Field(..., description="Total number of detections matching filters")
 
 
+class StaticDetectionResponse(AnprDetectionResultResponse):
+    """Detection response with serial number for public/static endpoints."""
+    serial_no: int = Field(..., description="1-based serial number within the current page")
+
+
+class StaticDetectionListResponse(BaseModel):
+    """Paginated response for public detection list."""
+    detections: list[StaticDetectionResponse] = Field(..., description="List of detections")
+    total: int = Field(..., description="Total number of detections matching filters")
+
+
+class NumberplateUpdateRequest(BaseModel):
+    """Request to manually update a numberplate text."""
+    id: int = Field(..., description="AnprDetection record ID", gt=0)
+    numberplate_text: str = Field(..., description="Corrected numberplate text", max_length=20)
+
+
+class NumberplateUpdateResponse(BaseModel):
+    """Response after updating a numberplate text."""
+    success: bool = Field(..., description="Whether update was successful")
+    message: str = Field(..., description="Response message")
+    detection: StaticDetectionResponse = Field(..., description="Updated detection record")
+
+
 class ErrorResponse(BaseModel):
     """Standard error response schema."""
 
