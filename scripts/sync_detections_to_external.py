@@ -111,7 +111,7 @@ def sync_detections(force: bool = False, dry_run: bool = False):
 
             total_orgs += 1
             detections = db.query(AnprDetection).filter(
-                AnprDetection.organization_id == org.id
+                AnprDetection.organization_id == org.id,AnprDetection.is_deleted == False
             ).all()
 
             print(f"\nOrg [{org.id}] {org.name} (external_org_id={org.external_org_id}) — {len(detections)} detection(s)")
