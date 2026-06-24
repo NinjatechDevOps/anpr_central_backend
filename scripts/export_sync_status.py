@@ -46,10 +46,11 @@ def export_sync_status(output_path: str, synced_only: bool = False):
                 AnprDetection.camera_name.label("camera_name"),
                 AnprDetection.external_device_id.label("external_device_id"),
                 AnprDetection.external_vehicle_id.label("external_vehicle_id"),
-                case(
-                    (AnprDetection.external_vehicle_id.isnot(None), "Synced"),
-                    else_="Not Synced"
-                ).label("sync_status"),
+                # case(
+                #     (AnprDetection.external_vehicle_id.isnot(None), "Synced"),
+                #     else_="Not Synced"
+                # ).label("sync_status"),
+                case(AnprDetection.sync_status).label("sync_status"),
                 AnprDetection.created_at.label("detection_created_at"),
                 AnprDetection.processed_at.label("llm_processed_at"),
                 AnprDetection.updated_at.label("last_updated_at"),
