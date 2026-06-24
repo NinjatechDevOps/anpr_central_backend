@@ -272,6 +272,42 @@ def resync_detections(org_id: int = None, dry_run: bool = False, skip_llm: bool 
             )
 
             det_total = len(detections)
+
+            # ------------------------------------------------------------------
+            # Resolve the single device ID for this entire org before looping.
+            # Priority: DB (any detection that already has one) → verify on
+            # external → create once if nothing exists.
+            # ------------------------------------------------------------------
+            org_device_id = None
+            existing_device = (
+                db.query(AnprDetection.external_device_id)
+                .filter(
+                    AnprDetection.organization_id == org.id,
+                    AnprDetection.external_device_id.isnot(None),
+                )
+                .limit(1)
+                .scalar()
+            )
+            if existing_device:
+                logger.info(
+                    f"│  [device] Found existing device in DB: {existing_device}. "
+                    f"Verifying on external server..."
+                )
+                try:
+                    sync_service.device.find_one(existing_device)
+                    org_device_id = existing_device
+                    logger.info(f"│  [device] Confirmed on external. Will reuse for all detections.")
+                except ExternalSyncException as _dev_err:
+                    logger.warning(
+                        f"│  [device] Not found on external ({_dev_err}). "
+                        f"Will create a new device on first detection."
+                    )
+            else:
+                logger.info(
+                    f"│  [device] No existing device for org. "
+                    f"Will create one on first detection."
+                )
+
             for det_idx, detection in enumerate(detections, start=1):
                 total_detections += 1
                 rec_title = f"  STARTING RECORD  #{det_idx} / {det_total}  "
@@ -400,41 +436,19 @@ def resync_detections(org_id: int = None, dry_run: bool = False, skip_llm: bool 
                         continue
 
                     # ----------------------------------------------------------
-                    # Step 2 — Verify device exists on external, create if not
+                    # Step 2 — Get or create the single device for this org.
+                    # One device per org — resolved once before the loop and
+                    # reused for every detection. Create only if still missing.
                     # ----------------------------------------------------------
-                    device_name = detection.camera_name or detection.camera_id
-
-                    if detection.external_device_id:
+                    if org_device_id:
+                        external_device_id = org_device_id
                         logger.info(
-                            f"│    [2] Has external_device_id={detection.external_device_id}. "
-                            f"Calling find_one on external server..."
+                            f"│    [2] Reusing org device: {external_device_id}"
                         )
-                        try:
-                            sync_service.device.find_one(detection.external_device_id)
-                            external_device_id = detection.external_device_id
-                            logger.info(
-                                f"│    [2] Device FOUND on external. "
-                                f"Reusing device_id={external_device_id}"
-                            )
-                        except ExternalSyncException as dev_err:
-                            logger.warning(
-                                f"│    [2] Device NOT FOUND on external "
-                                f"(error: {dev_err}). Creating new device..."
-                            )
-                            external_device_id = sync_service.device.create(
-                                name=device_name,
-                                source=None,
-                                frame_type=None,
-                                status="active",
-                                organization_id=org.external_org_id,
-                            )
-                            logger.info(
-                                f"│    [2] Device created: device_id={external_device_id}"
-                            )
                     else:
+                        device_name = org.name
                         logger.info(
-                            f"│    [2] No device_id. Creating new device "
-                            f"for camera='{device_name}'..."
+                            f"│    [2] No device for org yet. Creating device '{device_name}'..."
                         )
                         external_device_id = sync_service.device.create(
                             name=device_name,
@@ -443,8 +457,10 @@ def resync_detections(org_id: int = None, dry_run: bool = False, skip_llm: bool 
                             status="active",
                             organization_id=org.external_org_id,
                         )
+                        org_device_id = external_device_id
                         logger.info(
-                            f"│    [2] Device created: device_id={external_device_id}"
+                            f"│    [2] Device created: {external_device_id}. "
+                            f"Will reuse for remaining detections of this org."
                         )
 
                     # ----------------------------------------------------------
