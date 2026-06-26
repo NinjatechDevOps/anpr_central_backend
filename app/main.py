@@ -13,7 +13,7 @@ from app.db.session import init_db
 
 # Import routers
 from app.api.v1 import organizations
-from app.api.v1.endpoints import anpr, admin, analytics, cameras, static_anpr
+from app.api.v1.endpoints import anpr, admin, analytics, cameras, static_anpr, sync_jobs
 
 
 @asynccontextmanager
@@ -101,6 +101,12 @@ app.include_router(
     static_anpr.router,
     prefix=f"{settings.API_V1_PREFIX}/static",
     tags=["Static"]
+)
+
+app.include_router(
+    sync_jobs.router,
+    prefix=f"{settings.API_V1_PREFIX}/sync-jobs",
+    tags=["Sync Jobs"]
 )
 
 

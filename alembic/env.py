@@ -11,7 +11,7 @@ from alembic import context
 
 # Import your models
 from app.db.session import Base
-from app.models import Organization, AnprDetection
+from app.models import Organization, AnprDetection, SyncJob
 
 # this is the Alembic Config object
 config = context.config
