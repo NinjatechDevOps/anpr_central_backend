@@ -1,0 +1,282 @@
+"""
+Celery task for UI-triggered, date-range bulk sync of detections to the external
+ANPR server.
+
+Mirrors the idempotent logic of scripts/resync_detections.py:
+  - one device per org (verify on external, else create)
+  - per detection: GET vehicle find-one first
+      * found with data  -> skip entirely, leave DB untouched (skipped_count)
+      * missing / null    -> (re)create on external, then stamp the local row
+                             status=SUCCESS, sync_status="synced" (success_count)
+      * error             -> fail_count
+
+Progress is written to the sync_jobs row after every record so the
+GET /api/v1/sync-jobs/current endpoint can show it live. Cancellation is
+cooperative: the cancel endpoint flips the job to "cancelling" and the task
+stops at the next record boundary.
+"""
+import base64
+import os
+from datetime import datetime, timezone
+
+from sqlalchemy.orm import Session
+
+from app.core.celery_app import celery_app
+from app.core.config import settings
+from app.core.logging import app_logger as logger
+from app.core.exceptions import ExternalSyncException
+from app.models.anpr_detection import AnprDetection, ProcessingStatus
+from app.models.organization import Organization
+from app.repositories.anpr_repository import AnprDetectionRepository
+from app.repositories.sync_job_repository import SyncJobRepository
+from app.services.external_sync_service import get_external_sync_service
+from app.tasks.sync_tasks import DatabaseTask
+
+
+# ---------------------------------------------------------------------------
+# Helpers (same logic as scripts/resync_detections.py)
+# ---------------------------------------------------------------------------
+
+def get_image_b64(image_path: str):
+    """Read image from disk and return a base64 data URI, or None if missing."""
+    if not image_path:
+        return None
+    full_path = os.path.join(settings.UPLOAD_DIR, image_path)
+    if not os.path.exists(full_path):
+        return None
+    with open(full_path, "rb") as f:
+        raw_b64 = base64.b64encode(f.read()).decode("utf-8")
+    ext = os.path.splitext(full_path)[1].lower()
+    mime = "image/png" if ext == ".png" else "image/jpeg"
+    return f"data:{mime};base64,{raw_b64}"
+
+
+def get_number_plate(detection: AnprDetection) -> str:
+    """Number plate string for the external payload (raw, like resync)."""
+    return detection.numberplate_text
+
+
+def _resolve_org_device(sync_service, db: Session, org) -> str:
+    """
+    Resolve the single external device id for an org.
+
+    Reuse any device id already stored on the org's detections (verified on the
+    external server); otherwise return None so the caller creates one lazily.
+    """
+    existing_device = (
+        db.query(AnprDetection.external_device_id)
+        .filter(
+            AnprDetection.organization_id == org.id,
+            AnprDetection.external_device_id.isnot(None),
+        )
+        .limit(1)
+        .scalar()
+    )
+    if not existing_device:
+        return None
+    try:
+        sync_service.device.find_one(existing_device)
+        logger.info(f"[bulk-sync] org={org.id} reusing device {existing_device}")
+        return existing_device
+    except ExternalSyncException as err:
+        logger.warning(
+            f"[bulk-sync] org={org.id} device {existing_device} not on external "
+            f"({err}); will create a new one."
+        )
+        return None
+
+
+@celery_app.task(bind=True, base=DatabaseTask, name="bulk_sync_detections_by_range")
+def bulk_sync_detections_by_range(self, job_id: int):
+    """Run a date-range bulk sync for the given sync_jobs row."""
+    db: Session = self.db
+    job_repo = SyncJobRepository(db)
+    det_repo = AnprDetectionRepository(db)
+
+    job = job_repo.get_by_id(job_id)
+    if not job:
+        logger.error(f"[bulk-sync] job {job_id} not found")
+        return {"status": "error", "message": "job not found"}
+
+    # Mark running
+    job.status = "running"
+    job.started_at = datetime.now(timezone.utc)
+    db.commit()
+
+    try:
+        sync_service = get_external_sync_service()
+        if not sync_service.is_enabled:
+            job.status = "failed"
+            job.error_message = "External sync is disabled (EXTERNAL_SYNC_ENABLED=false or no EXTERNAL_SERVER_URL)."
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            logger.error(f"[bulk-sync] job {job_id} aborted: external sync disabled")
+            return {"status": "failed", "job_id": job_id}
+
+        # Eligible orgs: active, not super-admin, synced to external
+        orgs = (
+            db.query(Organization)
+            .filter(
+                Organization.is_active == True,  # noqa: E712
+                Organization.is_super_admin == False,  # noqa: E712
+                Organization.external_org_id.isnot(None),
+            )
+            .all()
+        )
+        org_ids = [o.id for o in orgs]
+
+        # Base filter for detections in this job's window across eligible orgs
+        def _range_query():
+            return (
+                db.query(AnprDetection)
+                .filter(
+                    AnprDetection.organization_id.in_(org_ids),
+                    AnprDetection.is_deleted == False,  # noqa: E712
+                    AnprDetection.created_at >= job.from_datetime,
+                    AnprDetection.created_at <= job.to_datetime,
+                )
+            )
+
+        total = _range_query().count() if org_ids else 0
+        job.total_records = total
+        db.commit()
+        logger.info(
+            f"[bulk-sync] job {job_id}: {total} detection(s) across "
+            f"{len(org_ids)} org(s) in [{job.from_datetime} .. {job.to_datetime}]"
+        )
+
+        if total == 0:
+            job.status = "completed"
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return {"status": "completed", "job_id": job_id, "total": 0}
+
+        cancelled = False
+
+        for org in orgs:
+            if cancelled:
+                break
+
+            detections = (
+                _range_query()
+                .filter(AnprDetection.organization_id == org.id)
+                .all()
+            )
+            if not detections:
+                continue
+
+            org_device_id = _resolve_org_device(sync_service, db, org)
+
+            for detection in detections:
+                # ---- cooperative cancel check (once per record) ----
+                if job_repo.is_cancel_requested(job_id):
+                    cancelled = True
+                    break
+
+                try:
+                    # Step 1 — already on external? skip entirely, untouched.
+                    if detection.external_vehicle_id:
+                        try:
+                            vehicle_data = sync_service.vehicle.find_one(detection.external_vehicle_id)
+                            actual = vehicle_data.get("data", vehicle_data) if isinstance(vehicle_data, dict) else None
+                            if actual and actual.get("id"):
+                                job.skipped_count = (job.skipped_count or 0) + 1
+                                db.commit()
+                                continue
+                            # 200 but null data -> fall through and recreate
+                        except ExternalSyncException:
+                            pass  # not found -> recreate
+
+                    # Step 2 — ensure org device exists (create lazily, once)
+                    if not org_device_id:
+                        org_device_id = sync_service.device.create(
+                            name=org.name,
+                            source=None,
+                            frame_type=None,
+                            status="active",
+                            organization_id=org.external_org_id,
+                        )
+                        logger.info(f"[bulk-sync] org={org.id} created device {org_device_id}")
+
+                    # Step 3 — image + plate
+                    vehicle_image_b64 = get_image_b64(detection.image_path)
+                    number_plate = get_number_plate(detection)
+                    device_name = detection.camera_name or detection.camera_id
+
+                    # Step 4 — create vehicle on external
+                    external_vehicle_id = sync_service.vehicle.create(
+                        number_plate=number_plate,
+                        vehicle_type=detection.vehicle_class,
+                        device_name=device_name,
+                        report_id=str(detection.id),
+                        number_plate_image=vehicle_image_b64,
+                        vehicle_image=vehicle_image_b64,
+                        device_id=org_device_id,
+                        organization_id=org.external_org_id,
+                    )
+
+                    # Step 5 — stamp local row: success + synced
+                    det_repo.update(detection.id, {
+                        "external_device_id": org_device_id,
+                        "external_vehicle_id": external_vehicle_id,
+                        "status": ProcessingStatus.SUCCESS,
+                        "sync_status": "synced",
+                    })
+
+                    job.success_count = (job.success_count or 0) + 1
+                    db.commit()
+
+                except Exception as rec_err:
+                    db.rollback()
+                    # job object was expired by rollback; reload before mutating
+                    job = job_repo.get_by_id(job_id)
+                    job.fail_count = (job.fail_count or 0) + 1
+                    db.commit()
+                    logger.error(f"[bulk-sync] job {job_id} detection {detection.id} failed: {rec_err}")
+
+                # mirror progress into Celery state (best-effort)
+                self.update_state(state="PROGRESS", meta={
+                    "total": job.total_records,
+                    "success": job.success_count,
+                    "fail": job.fail_count,
+                    "skipped": job.skipped_count,
+                })
+
+        # Finalize
+        job = job_repo.get_by_id(job_id)
+        if cancelled:
+            job.status = "cancelled"
+        elif (job.fail_count or 0) > 0:
+            job.status = "completed_with_errors"
+        else:
+            job.status = "completed"
+        job.finished_at = datetime.now(timezone.utc)
+        db.commit()
+
+        logger.info(
+            f"[bulk-sync] job {job_id} {job.status}: "
+            f"success={job.success_count} skipped={job.skipped_count} "
+            f"fail={job.fail_count} / total={job.total_records}"
+        )
+        return {
+            "status": job.status,
+            "job_id": job_id,
+            "success": job.success_count,
+            "skipped": job.skipped_count,
+            "fail": job.fail_count,
+            "total": job.total_records,
+        }
+
+    except Exception as exc:
+        db.rollback()
+        try:
+            job = job_repo.get_by_id(job_id)
+            if job:
+                job.status = "failed"
+                job.error_message = str(exc)
+                job.finished_at = datetime.now(timezone.utc)
+                db.commit()
+        except Exception:
+            db.rollback()
+        logger.error(f"[bulk-sync] job {job_id} aborted with fatal error: {exc}")
+        return {"status": "failed", "job_id": job_id, "error": str(exc)}
