@@ -9,8 +9,6 @@ import time
 
 from app.core.config import settings
 from app.core.logging import app_logger as logger
-from app.db.session import init_db
-
 # Import routers
 from app.api.v1 import organizations
 from app.api.v1.endpoints import anpr, admin, analytics, cameras, static_anpr, sync_jobs
@@ -23,10 +21,6 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 80)
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION}")
     logger.info("=" * 80)
-
-    # Initialize database
-    init_db()
-    logger.info("Database initialized")
 
     # Store startup time
     app.state.start_time = time.time()

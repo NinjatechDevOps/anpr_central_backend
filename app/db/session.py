@@ -5,7 +5,6 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 
 from app.core.config import settings
-from app.core.logging import app_logger as logger
 
 # Create database engine
 engine = create_engine(
@@ -29,10 +28,3 @@ def get_db():
         yield db
     finally:
         db.close()
-
-
-def init_db():
-    """Initialize database tables."""
-    logger.info("Initializing database...")
-    Base.metadata.create_all(bind=engine)
-    logger.info("Database initialized successfully")
