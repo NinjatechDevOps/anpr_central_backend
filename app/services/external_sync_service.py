@@ -279,7 +279,8 @@ class ExternalVehicleService:
                device_name: Optional[str] = None, report_id: Optional[str] = None,
                number_plate_image: Optional[str] = None, vehicle_image: Optional[str] = None,
                device_id: str = "", organization_id: str = "",
-               is_sent_back: str = "no", is_updated: bool = False) -> str:
+               is_sent_back: str = "no", is_updated: bool = False,
+               created_at: Optional[str] = None, updated_at: Optional[str] = None) -> str:
         """Create vehicle report on external server. Returns external UUID."""
         url = ExternalEndpoint.VEHICLE_CREATE.external_url()
         payload = {
@@ -293,6 +294,8 @@ class ExternalVehicleService:
             "organizationId": organization_id,
             "isSentBack": is_sent_back,
             "isUpdated": is_updated,
+            "createdAt": created_at,
+            "updatedAt": updated_at,
         }
         # # Log payload with truncated image fields to avoid flooding logs
         # log_payload = {
@@ -317,7 +320,8 @@ class ExternalVehicleService:
                vehicle_type: Optional[str] = None, device_name: Optional[str] = None,
                report_id: Optional[str] = None, number_plate_image: Optional[str] = None,
                vehicle_image: Optional[str] = None, is_sent_back: Optional[str] = None,
-               is_updated: Optional[bool] = None) -> dict:
+               is_updated: Optional[bool] = None, created_at: Optional[str] = None,
+               updated_at: Optional[str] = None) -> dict:
         """Update vehicle report on external server."""
         url = ExternalEndpoint.VEHICLE_UPDATE.external_url()
         payload = {"id": external_vehicle_id}
@@ -337,6 +341,10 @@ class ExternalVehicleService:
             payload["isSentBack"] = is_sent_back
         if is_updated is not None:
             payload["isUpdated"] = is_updated
+        if created_at is not None:
+            payload["createdAt"] = created_at
+        if updated_at is not None:
+            payload["updatedAt"] = updated_at
 
         # logger.info(f"External vehicle update: {external_vehicle_id}")
         response = self._client.put(url, json=payload, headers=self._auth.get_headers())

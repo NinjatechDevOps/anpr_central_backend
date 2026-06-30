@@ -153,6 +153,13 @@ def attach_http_logging(sync_service) -> None:
 # Helpers (same logic as sync_detections_to_external.py)
 # ---------------------------------------------------------------------------
 
+def _fmt_dt(dt) -> str:
+    """Format a datetime as 'YYYY-MM-DDTHH:MM:SS.mmmZ' for the external server."""
+    if dt is None:
+        return None
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
 def get_image_b64(image_path: str):
     """Read image from disk and return base64 data URI, or None if file missing."""
     full_path = os.path.join(settings.UPLOAD_DIR, image_path)
@@ -354,10 +361,16 @@ def resync_detections(org_id: int = None, dry_run: bool = False, skip_llm: bool 
                                 )
 
                             else:
-                                # 200 with valid data — nothing to do
+                                # 200 with valid data — patch timestamps then skip
+                                sync_service.vehicle.update(
+                                    detection.external_vehicle_id,
+                                    created_at=_fmt_dt(detection.detected_at),
+                                    updated_at=_fmt_dt(detection.detected_at),
+                                )
                                 logger.info(
                                     f"│    [1] Vehicle FOUND with data. "
-                                    f"Skipping — no action needed."
+                                    f"Updated createdAt/updatedAt on external for vehicle "
+                                    f"{detection.external_vehicle_id}. Skipping."
                                 )
                                 count_found_on_external += 1
                                 continue
@@ -460,6 +473,8 @@ def resync_detections(org_id: int = None, dry_run: bool = False, skip_llm: bool 
                         vehicle_image=vehicle_image_b64,
                         device_id=external_device_id,
                         organization_id=org.external_org_id,
+                        created_at=_fmt_dt(detection.detected_at),
+                        updated_at=_fmt_dt(detection.detected_at),
                     )
                     logger.info(
                         f"│    [5] Vehicle created: external_vehicle_id={external_vehicle_id}"

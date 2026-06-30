@@ -5,6 +5,13 @@ All external API calls go through these async tasks with 3 retries.
 import base64
 import os
 
+
+def _fmt_dt(dt) -> str:
+    """Format a datetime as 'YYYY-MM-DDTHH:MM:SS.mmmZ' for the external server."""
+    if dt is None:
+        return None
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
 from celery import Task
 from sqlalchemy.orm import Session
 
@@ -228,6 +235,8 @@ def sync_detection(self, detection_id: int):
             vehicle_image=vehicle_image_b64,
             device_id=external_device_id,
             organization_id=external_org_id,
+            created_at=_fmt_dt(detection.detected_at),
+            updated_at=_fmt_dt(detection.detected_at),
         )
 
         # 7. Update detection with external IDs

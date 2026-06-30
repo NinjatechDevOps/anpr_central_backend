@@ -38,6 +38,13 @@ from app.tasks.sync_tasks import DatabaseTask
 # Helpers (same logic as scripts/resync_detections.py)
 # ---------------------------------------------------------------------------
 
+def _fmt_dt(dt) -> str:
+    """Format a datetime as 'YYYY-MM-DDTHH:MM:SS.mmmZ' for the external server."""
+    if dt is None:
+        return None
+    return dt.strftime("%Y-%m-%dT%H:%M:%S.") + f"{dt.microsecond // 1000:03d}Z"
+
+
 def get_image_b64(image_path: str):
     """Read image from disk and return a base64 data URI, or None if missing."""
     if not image_path:
@@ -188,6 +195,11 @@ def bulk_sync_detections_by_range(self, job_id: int):
                             vehicle_data = sync_service.vehicle.find_one(detection.external_vehicle_id)
                             actual = vehicle_data.get("data", vehicle_data) if isinstance(vehicle_data, dict) else None
                             if actual and actual.get("id"):
+                                sync_service.vehicle.update(
+                                    detection.external_vehicle_id,
+                                    created_at=_fmt_dt(detection.detected_at),
+                                    updated_at=_fmt_dt(detection.detected_at),
+                                )
                                 log_repo.create({
                                     "sync_job_id": job_id,
                                     "detection_id": det_id,
@@ -233,6 +245,8 @@ def bulk_sync_detections_by_range(self, job_id: int):
                         vehicle_image=vehicle_image_b64,
                         device_id=org_device_id,
                         organization_id=org.external_org_id,
+                        created_at=_fmt_dt(detection.detected_at),
+                        updated_at=_fmt_dt(detection.detected_at),
                     )
 
                     # Step 5 — stamp local row: success + synced
