@@ -29,6 +29,7 @@ from app.models.anpr_detection import AnprDetection, ProcessingStatus
 from app.models.organization import Organization
 from app.repositories.anpr_repository import AnprDetectionRepository
 from app.repositories.sync_job_repository import SyncJobRepository
+from app.repositories.sync_job_log_repository import SyncJobLogRepository
 from app.services.external_sync_service import get_external_sync_service
 from app.tasks.sync_tasks import DatabaseTask
 
@@ -92,6 +93,7 @@ def bulk_sync_detections_by_range(self, job_id: int):
     db: Session = self.db
     job_repo = SyncJobRepository(db)
     det_repo = AnprDetectionRepository(db)
+    log_repo = SyncJobLogRepository(db)
 
     job = job_repo.get_by_id(job_id)
     if not job:
@@ -173,6 +175,12 @@ def bulk_sync_detections_by_range(self, job_id: int):
                     cancelled = True
                     break
 
+                # Capture scalar attrs before the try block so they survive a rollback
+                det_id = detection.id
+                ext_org_id = org.external_org_id
+                cam_id = detection.camera_id
+                plate = detection.numberplate_text
+
                 try:
                     # Step 1 — already on external? skip entirely, untouched.
                     if detection.external_vehicle_id:
@@ -180,6 +188,18 @@ def bulk_sync_detections_by_range(self, job_id: int):
                             vehicle_data = sync_service.vehicle.find_one(detection.external_vehicle_id)
                             actual = vehicle_data.get("data", vehicle_data) if isinstance(vehicle_data, dict) else None
                             if actual and actual.get("id"):
+                                log_repo.create({
+                                    "sync_job_id": job_id,
+                                    "detection_id": det_id,
+                                    "external_org_id": ext_org_id,
+                                    "camera_id": cam_id,
+                                    "external_device_id": org_device_id,
+                                    "numberplate_text": plate,
+                                    "is_sent": False,
+                                    "log_status": "skipped",
+                                    "error_message": f"Detection already exists on external server (external_vehicle_id={detection.external_vehicle_id})",
+                                    "external_vehicle_id": detection.external_vehicle_id,
+                                })
                                 job.skipped_count = (job.skipped_count or 0) + 1
                                 db.commit()
                                 continue
@@ -223,6 +243,19 @@ def bulk_sync_detections_by_range(self, job_id: int):
                         "sync_status": "synced",
                     })
 
+                    log_repo.create({
+                        "sync_job_id": job_id,
+                        "detection_id": det_id,
+                        "external_org_id": ext_org_id,
+                        "camera_id": cam_id,
+                        "external_device_id": org_device_id,
+                        "numberplate_text": plate,
+                        "is_sent": True,
+                        "log_status": "sent",
+                        "error_message": None,
+                        "external_vehicle_id": external_vehicle_id,
+                    })
+
                     job.success_count = (job.success_count or 0) + 1
                     db.commit()
 
@@ -230,9 +263,21 @@ def bulk_sync_detections_by_range(self, job_id: int):
                     db.rollback()
                     # job object was expired by rollback; reload before mutating
                     job = job_repo.get_by_id(job_id)
+                    log_repo.create({
+                        "sync_job_id": job_id,
+                        "detection_id": det_id,
+                        "external_org_id": ext_org_id,
+                        "camera_id": cam_id,
+                        "external_device_id": org_device_id,
+                        "numberplate_text": plate,
+                        "is_sent": False,
+                        "log_status": "failed",
+                        "error_message": str(rec_err),
+                        "external_vehicle_id": None,
+                    })
                     job.fail_count = (job.fail_count or 0) + 1
                     db.commit()
-                    logger.error(f"[bulk-sync] job {job_id} detection {detection.id} failed: {rec_err}")
+                    logger.error(f"[bulk-sync] job {job_id} detection {det_id} failed: {rec_err}")
 
                 # mirror progress into Celery state (best-effort)
                 self.update_state(state="PROGRESS", meta={

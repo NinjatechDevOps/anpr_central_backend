@@ -11,10 +11,13 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.repositories.sync_job_repository import SyncJobRepository
+from app.repositories.sync_job_log_repository import SyncJobLogRepository
 from app.schemas.sync_job_schemas import (
     SyncJobCreateRequest,
     SyncJobResponse,
     SyncJobListResponse,
+    SyncJobLogResponse,
+    SyncJobLogListResponse,
 )
 from app.tasks.bulk_sync_tasks import bulk_sync_detections_by_range
 from app.core.logging import app_logger as logger
@@ -88,7 +91,8 @@ async def get_current_sync_job(db: Session = Depends(get_db)):
             status_code=status.HTTP_404_NOT_FOUND,
             detail="No sync job has been run yet.",
         )
-    return SyncJobResponse.from_job(job)
+    has_logs = SyncJobLogRepository(db).has_logs_for_job(job.id)
+    return SyncJobResponse.from_job(job, has_logs=has_logs)
 
 
 @router.post(
@@ -134,7 +138,37 @@ async def list_sync_jobs(
     skip = (page - 1) * page_size
     jobs = repo.list_recent(skip=skip, limit=page_size)
     total = repo.count()
+    job_ids = [j.id for j in jobs]
+    jobs_with_logs = SyncJobLogRepository(db).get_job_ids_with_logs(job_ids)
     return SyncJobListResponse(
-        jobs=[SyncJobResponse.from_job(j) for j in jobs],
+        jobs=[SyncJobResponse.from_job(j, has_logs=(j.id in jobs_with_logs)) for j in jobs],
+        total=total,
+    )
+
+
+@router.get(
+    "/{job_id}/logs",
+    response_model=SyncJobLogListResponse,
+    summary="List log entries for a sync job (public)",
+    description="Paginated per-detection audit log for a bulk sync job. Default page size is 10.",
+)
+async def list_sync_job_logs(
+    job_id: int,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(10, ge=1, le=100),
+    db: Session = Depends(get_db),
+):
+    job_repo = SyncJobRepository(db)
+    if not job_repo.get_by_id(job_id):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Sync job {job_id} not found.",
+        )
+    log_repo = SyncJobLogRepository(db)
+    skip = (page - 1) * page_size
+    rows = log_repo.get_by_job(job_id, skip=skip, limit=page_size)
+    total = log_repo.count_by_job(job_id)
+    return SyncJobLogListResponse(
+        logs=[SyncJobLogResponse.from_log(log, organization_name=org_name) for log, org_name in rows],
         total=total,
     )
