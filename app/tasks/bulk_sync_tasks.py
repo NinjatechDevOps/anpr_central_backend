@@ -107,9 +107,16 @@ def bulk_sync_detections_by_range(self, job_id: int):
         logger.error(f"[bulk-sync] job {job_id} not found")
         return {"status": "error", "message": "job not found"}
 
-    # Mark running
+    # Mark running. Reset the progress counters too: if this task is a
+    # redelivered rerun of the same job_id (e.g. the worker was killed
+    # mid-run and Celery's task_acks_late puts the unacked task back on the
+    # queue), starting from 0 here prevents the new pass's increments from
+    # stacking on top of the previous (partial) pass's counts.
     job.status = "running"
     job.started_at = datetime.now(timezone.utc)
+    job.success_count = 0
+    job.fail_count = 0
+    job.skipped_count = 0
     db.commit()
 
     try:
