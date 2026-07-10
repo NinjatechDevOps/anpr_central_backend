@@ -31,6 +31,7 @@ from app.repositories.anpr_repository import AnprDetectionRepository
 from app.repositories.sync_job_repository import SyncJobRepository
 from app.repositories.sync_job_log_repository import SyncJobLogRepository
 from app.services.external_sync_service import get_external_sync_service
+from app.services.numberplate_provider_factory import get_numberplate_service
 from app.tasks.sync_tasks import DatabaseTask
 
 
@@ -62,6 +63,39 @@ def get_image_b64(image_path: str):
 def get_number_plate(detection: AnprDetection) -> str:
     """Number plate string for the external payload (raw, like resync)."""
     return detection.numberplate_text
+
+
+def run_numberplate_extraction(detection: AnprDetection, db: Session, det_repo: AnprDetectionRepository) -> str:
+    """
+    Run numberplate extraction via the configured provider (same factory as the
+    automatic upload pipeline). Never raises — any failure is swallowed and
+    logged so a sync attempt is never blocked on extraction.
+    """
+    service = get_numberplate_service()
+    if service is None:
+        return "extraction skipped (no provider configured)"
+
+    try:
+        if not service.validate_image(detection.image_path):
+            return "extraction skipped (invalid image)"
+        result = service.extract_numberplate(image_path=detection.image_path)
+    except Exception as exc:
+        return f"extraction failed ({exc})"
+
+    det_repo.update(detection.id, {
+        "numberplate_available": result.numberplate_available if result else False,
+        "numberplate_text": result.numberplate_text if result and result.numberplate_text else "N/A",
+        "numberplate_color": result.numberplate_color if result and result.numberplate_color else "unknown",
+        "vehicle_side": result.vehicle_side if result and result.vehicle_side else "unknown",
+        "llm_confidence": str(result.confidence_score) if result else "0.0",
+        "llm_raw_response": result.reasoning if result and result.reasoning else "N/A",
+        "processed_at": datetime.now(timezone.utc),
+    })
+    db.commit()
+    db.refresh(detection)
+
+    plate = result.numberplate_text if result and result.numberplate_available else "none"
+    return f"extraction done (plate={plate})"
 
 
 def _resolve_org_device(sync_service, db: Session, org) -> str:
@@ -225,6 +259,16 @@ def bulk_sync_detections_by_range(self, job_id: int):
                             # 200 but null data -> fall through and recreate
                         except ExternalSyncException:
                             pass  # not found -> recreate
+
+                    # Step 1.5 — extract numberplate if it's missing/N-A (regardless of processed_at,
+                    # which can go stale relative to numberplate_text if it was cleared manually)
+                    plate_missing = (
+                        not detection.numberplate_text
+                        or detection.numberplate_text == "N/A"
+                    )
+                    if plate_missing:
+                        note = run_numberplate_extraction(detection, db, det_repo)
+                        logger.info(f"[bulk-sync] detection {det_id} {note}")
 
                     # Step 2 — ensure org device exists (create lazily, once)
                     if not org_device_id:
