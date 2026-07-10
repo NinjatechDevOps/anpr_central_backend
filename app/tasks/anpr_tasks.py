@@ -11,7 +11,7 @@ from app.core.logging import app_logger as logger
 from app.db.session import SessionLocal
 from app.models.anpr_detection import AnprDetection, ProcessingStatus
 from app.repositories.anpr_repository import AnprDetectionRepository
-from app.services.llm_service import get_llm_service
+from app.services.numberplate_provider_factory import get_numberplate_service
 
 
 class DatabaseTask(Task):
@@ -77,10 +77,11 @@ def process_anpr_detection(self, detection_id: int):
         db.commit()
         logger.info(f"Detection {detection_id} status updated to PROCESSING")
 
-        # Step 3 & 4: LLM extraction (skipped if GOOGLE_API_KEY is not configured)
-        if not settings.GOOGLE_API_KEY:
+        # Step 3 & 4: Numberplate extraction (skipped if the configured provider has no credentials)
+        numberplate_service = get_numberplate_service()
+        if numberplate_service is None:
             logger.warning(
-                f"GOOGLE_API_KEY not set — skipping LLM for detection {detection_id}, "
+                f"No numberplate provider configured — skipping extraction for detection {detection_id}, "
                 "proceeding directly to external sync"
             )
             update_data = {
@@ -94,12 +95,11 @@ def process_anpr_detection(self, detection_id: int):
                 "llm_raw_response": None,
             }
         else:
-            llm_service = get_llm_service()
-            if not llm_service.validate_image(detection.image_path):
+            if not numberplate_service.validate_image(detection.image_path):
                 raise ValueError(f"Invalid or corrupted image: {detection.image_path}")
 
-            logger.info(f"Calling LLM service for detection {detection_id}")
-            llm_result = llm_service.extract_numberplate(
+            logger.info(f"Calling numberplate provider for detection {detection_id}")
+            llm_result = numberplate_service.extract_numberplate(
                 image_path=detection.image_path
             )
 

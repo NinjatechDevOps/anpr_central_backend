@@ -43,6 +43,12 @@ class Settings(BaseSettings):
     # Google Gemini LLM
     GOOGLE_API_KEY: str = ""  # Set via environment variable
 
+    # Numberplate Recognition Provider
+    NUMBERPLATE_PROVIDER: str = "gemini"  # "gemini" | "plate_recognizer"
+    PLATE_RECOGNIZER_API_TOKEN: str = ""
+    PLATE_RECOGNIZER_API_URL: str = "https://api.platerecognizer.com/v1/plate-reader/"
+    PLATE_RECOGNIZER_REGIONS: str = "in"
+
     # External ANPR Server
     EXTERNAL_SERVER_URL: str = ""
     EXTERNAL_ADMIN_NAME: str = ""
